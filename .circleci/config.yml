@@ -1,0 +1,121 @@
+version: 2.1
+
+orbs:
+  node: circleci/node@4.7.0
+  heroku: circleci/heroku@1.2.6
+
+jobs:
+  install_dependencies:
+    executor:
+      name: node/default
+      tag: '14.17.5'
+    steps:
+      - checkout
+      - run:
+          name: Install NPM dependencies
+          command: npm install --no-progress
+      - save_cache:
+          key: node_modules-{{checksum "package-lock.json"}}
+          paths:
+            - node_modules
+  integration_test:
+    machine:
+      image: ubuntu-2004:202101-01
+    steps:
+      - checkout
+      - run:
+          name: Build integration test DB
+          command: docker-compose up -d
+      - restore_cache:
+          keys:
+            - node_modules-{{checksum "package-lock.json"}}
+      - run:
+          name: Install Node
+          command: nvm install v14.17.5 && nvm use v14.17.5
+      - run:
+          name: Run integration test suite
+          command: npm run test:integration
+  unit_test:
+    executor:
+      name: node/default
+      tag: '14.17.5'
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - node_modules-{{checksum "package-lock.json"}}
+      - run:
+          name: Run test suite
+          command: npm run test:unit -- --maxWorkers=4
+  e2e_test:
+    executor:
+      name: node/default
+      tag: '14.17.5'
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - node_modules-{{checksum "package-lock.json"}}
+      - run:
+          name: Run e2e test suite to smoke test successful deployment
+          command: npm run test:e2e -- --maxWorkers=4
+
+workflows:
+  test:
+    jobs:
+      - install_dependencies:
+          filters:
+            branches:
+              ignore:
+                - main
+      - unit_test:
+          filters:
+            branches:
+              ignore:
+                - main
+          requires:
+            - install_dependencies
+      - integration_test:
+          filters:
+            branches:
+              ignore:
+                - main
+          requires:
+            - install_dependencies
+  deploy:
+    jobs:
+      - install_dependencies:
+          filters:
+            branches:
+              only:
+                - main
+      - unit_test:
+          filters:
+            branches:
+              only:
+                - main
+          requires:
+            - install_dependencies
+      - integration_test:
+          filters:
+            branches:
+              only:
+                - main
+          requires:
+            - install_dependencies
+      - heroku/deploy-via-git:
+          filters:
+            branches:
+              only:
+                - main
+          requires:
+            - install_dependencies
+            - unit_test
+            - integration_test
+      - e2e_test:
+          filters:
+            branches:
+              only:
+                - main
+          requires:
+            - heroku/deploy-via-git
